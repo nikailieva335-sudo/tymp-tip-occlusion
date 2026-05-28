@@ -1,0 +1,13 @@
+//I2C
+&i2c0 {
+    status = "okay";
+    sda-pin = <26>;
+    scl-pin = <27>;
+
+    lsm6dsl@6a {
+        compatible = "st,lsm6dsl";
+        reg = <0x6a>;
+        irq-gpios = <&gpio1 3 GPIO_ACTIVE_HIGH>; //come back to change (wiring)
+        label = "LSM6DSL";
+    };
+};
