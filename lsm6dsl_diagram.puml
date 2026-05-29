@@ -1,0 +1,66 @@
+@startuml
+
+[*] -> init
+
+state init {
+    init_run :
+
+    init_imu: Power on LSM6DSLTR
+    init_imu: Configure I2C
+    init_imu: Read reference vector
+
+
+}
+
+state calibrate {
+    calibrate_entry: User - hold probe at correct angle
+    calibrate_entry -d-> calibrate_run
+    calibrate_run: Sample accelerometer
+    calibrate_run: Average samples for reference vector
+}
+
+state idle {
+
+}
+
+state detect_seal {
+
+}
+
+state angle_assessment {
+    detect_angle_entry -down-> detect_angle_run
+    detect_angle_entry: Load reference vector
+    detect_angle_run: Sample LSM6DSLTR via I2C
+    detect_angle_run: Normalize reading
+    detect_angle_run -down-> detect_angle_check
+    detect_angle_run: Compute angle vs reference
+    detect_angle_check: is angle above threshold error?
+
+}
+
+state angle_warning {
+    warning_entry : Stop LED Timers
+    warning_entry -> warning_run
+    warning_run : Send error notification
+    warning_run -> warning_exit
+    warning_exit : Clear err_events
+}
+
+
+init -> idle
+idle -> detect_seal
+init_imu--> calibrate : NO_REFEFENCE
+detect_angle_check -down-> angle_warning : WRONG_ANGLE
+detect_seal -> angle_assessment
+angle_assessment -> acquire_data : CORRECT_ANGLE
+
+
+
+
+
+
+
+
+
+@enduml
+
