@@ -96,12 +96,12 @@ state warning {
 
 }
 
-init -down-> idle : BLE Initialized
+init -down--> idle : BLE Initialized
 
 idle -down-> detect_seal : EVENT_TRIGGER
-init_imu -right-> calibrate : NO_REFEFENCE
+init_imu -up-> calibrate : NO_REFEFENCE
 detect_angle_check -right-> angle_warning : WRONG_ANGLE
-detect_seal -down---> angle_assessment
+detect_seal -down-> angle_assessment
 angle_assessment -left-> acquire_data : CORRECT_ANGLE
 
 warning -right-> idle
@@ -112,14 +112,6 @@ acquire_data -[#red]-> [*] : Sensor Read Error
 ble_tx -> idle
 acquire_data -up-> ble_tx: Filled Data Buffers OR\n<= MIN_PRESSURE_daPa OR\n<= MAX_MEASURE_TIME_MS
 acquire_data -[#blue]-> warning : >= MAX_MEASURE_TIME_MS
-
-
-
-
-
-
-
-
 
 @enduml
 
