@@ -1,0 +1,117 @@
+@startuml
+
+[*] -left-> init
+
+state init {
+    init_run : Configure GPIO Pins
+    init_run : Configure Interfaces
+    init_run : Initialize Device State Struct
+    init_run : Sleep Actuator
+    init_run : BLE Advertise / Scan Response
+    init_run : BLE Connection Initialized
+    init_run : Read Baseline Pressure
+
+    init_run -> init_imu
+    init_imu: Power on LSM6DSLTR
+    init_imu: Configure I2C
+    init_imu: Read reference vector
+
+
+}
+
+state calibrate {
+    calibrate_entry: User - hold probe at correct angle
+    calibrate_entry -d-> calibrate_run
+    calibrate_run: Sample accelerometer
+    calibrate_run: Average samples for reference vector
+}
+
+state idle {
+    idle_entry : Center Actuator
+    init_entry : Check battery level
+    idle_entry -down-> idle_run
+    idle_run : Wait for Trigger (Sleep)
+    idle_run : State LED Yellow
+    idle_run -down-> idle_exit
+
+}
+
+state detect_seal {
+    detect_seal_entry -down-> detect_seal_run
+    detect_seal_entry : Start Pressure Measurement Timer
+    detect_seal_run : Measure Pressure
+    detect_seal_run : State LED Yellow
+    detect_seal_run : Wait for Pressure >= SEAL_PRESSURE_THRESHOLD_daPa
+    detect_seal_run -down-> detect_seal_exit
+
+}
+
+state angle_assessment {
+    detect_angle_entry -down-> detect_angle_run
+    detect_angle_entry: Load reference vector
+    detect_angle_run: Sample LSM6DSLTR via I2C
+    detect_angle_run: Normalize reading
+    detect_angle_run -down-> detect_angle_check
+    detect_angle_run: Compute angle vs reference
+    detect_angle_check: is angle above threshold error?
+
+}
+
+state acquire_data {
+    acquire_data_entry -down-> acquire_data_run
+    acquire_data_entry : Speaker On
+    acquire_data_entry : Increase Pressure >= PRESSURE_THRESHOLD_daPa
+    acquire_data_entry : Decrease Pressure
+    acquire_data_run : Measure Mic (ADC Buffer)
+    acquire_data_run: Env Detect ADC Buffer
+    acquire_data_run : Measure Pressure (I2C)
+    acquire_data_run : State LED Toggle Green
+    acquire_data_run -down-> acquire_data_exit
+    acquire_data_exist : Stop Pressure Measurement Timer
+    acquire_data_exit : Speaker Off
+    acquire_data_exit : Actuator Sleep
+
+}
+state angle_warning {
+    a_warning_entry : Stop LED Timers
+    a_warning_entry -> a_warning_run
+    a_warning_run : Send error notification
+    a_warning_run -> a_warning_exit
+    a_warning_exit : Clear err_events
+}
+
+state ble_tx {
+    ble_tx_run : Send Notification
+    ble_tx_run : Send Compliance:Pressure Data
+    ble_tx_run : Send Exit Status
+    ble_tx_run : State LED Blue
+}
+
+state warning {
+    warning_entry : Stop LED Timers
+    warning_entry -down-> warning_run
+    warning_run : Send BLE err_events notification
+    warning_run -down-> warning_exit
+    warning_exit : Clear err_events
+
+}
+
+init -down--> idle : BLE Initialized
+
+idle -down-> detect_seal : EVENT_TRIGGER
+init_imu -up-> calibrate : NO_REFEFENCE
+detect_angle_check -right-> angle_warning : WRONG_ANGLE
+detect_seal -down-> angle_assessment
+angle_assessment -left-> acquire_data : CORRECT_ANGLE
+
+warning -right-> idle
+idle -[#red]-> [*] : VBUS Detected\n Sensor Read Error\n Actuator Not Centered
+init -[#red]-> [*]: Device Configuration Error\n VBUS Detected
+acquire_data -[#red]-> [*] : Sensor Read Error
+
+ble_tx -> idle
+acquire_data -up-> ble_tx: Filled Data Buffers OR\n<= MIN_PRESSURE_daPa OR\n<= MAX_MEASURE_TIME_MS
+acquire_data -[#blue]-> warning : >= MAX_MEASURE_TIME_MS
+detect_seal -[#blue]-> warning : SEAL_DETECT_TIMEOUT_MS
+@enduml
+
