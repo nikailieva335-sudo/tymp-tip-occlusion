@@ -112,6 +112,6 @@ acquire_data -[#red]-> [*] : Sensor Read Error
 ble_tx -> idle
 acquire_data -up-> ble_tx: Filled Data Buffers OR\n<= MIN_PRESSURE_daPa OR\n<= MAX_MEASURE_TIME_MS
 acquire_data -[#blue]-> warning : >= MAX_MEASURE_TIME_MS
-
+detect_seal -[#blue]-> warning : SEAL_DETECT_TIMEOUT_MS
 @enduml
 
