@@ -13,7 +13,7 @@
 // 1. Sensor Bias Calibration
 // 2. Clinician Calibration of Reference Angle
 // 3. Button 1 (DevKit) to trigger Clinician Calibration
-// 4. Button 2 and 3 to register left and right insertion angles
+// 4. Button 2 and 3 to register left and right insertion angles before sensor capture
 // 5. Issue Warnings when angle passes threshold
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
@@ -42,8 +42,15 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 #define PI 3.14159265358979323846
 
 // Button node
+// WARNING: This code assumes that the positive reference is LEFT EAR!!
 static const struct gpio_dt_spec calib_btn = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
+// Left ear button
+static const struct gpio_dt_spec left_btn = GPIO_DT_SPEC_GET(DT_ALIAS(sw2), gpios);
+// Right ear button
+static const struct gpio_dt_spec right_btn = GPIO_DT_SPEC_GET(DT_ALIAS(sw3), gpios);
 
+enum ear_side { EAR_LEFT, EAR_RIGHT };
+static enum ear_side current_ear = EAR_LEFT;
 
 // Reference angle
 struct reference_angle {
@@ -229,11 +236,14 @@ int main(void)
 		return -ENODEV;
 	}
 
-	if (!gpio_is_ready_dt(&calib_btn)) {
-		printk("Calibration button not ready\n");
+	if (!gpio_is_ready_dt(&calib_btn) || !gpio_is_ready_dt(&right_btn) ||
+	    !gpio_is_ready_dt(&left_btn)) {
+		printk("Calibration button(s) not ready\n");
 		return -ENODEV;
 	}
 	gpio_pin_configure_dt(&calib_btn, GPIO_INPUT);
+	gpio_pin_configure_dt(&right_btn, GPIO_INPUT);
+	gpio_pin_configure_dt(&left_btn, GPIO_INPUT);
 
 	printk("MPU-6050 ready: %s\n", imu->name);
 	printk("Calibrating -- keep device still and flat...\n");
@@ -246,21 +256,52 @@ int main(void)
 		return rc;
 	}
 
+	printk("Waiting for ear selection -- press Button 3 (LEFT) or Button 4 (RIGHT) to begin.\n");
+
 	double pitch_deg = 0.0;
 	double roll_deg = 0.0;
 	bool initialized = false;
 	bool btn_prev_pressed = false;
+	bool right_btn_prev_pressed = false;
+	bool left_btn_prev_pressed = false;
+	bool ear_selected = false;
 	int64_t last_time = k_uptime_get();
 
 	while (1) {
-		// Poll Button 1. Only react on release->pressed transition
-		// so holding it down doesn't retrigger repeatedly.
+		// Poll all three buttons. Only react on release->pressed
+		// transitions so holding one down doesn't retrigger.
 		bool btn_now_pressed = gpio_pin_get_dt(&calib_btn) == 1;
+		bool right_btn_now_pressed = gpio_pin_get_dt(&right_btn) == 1;
+		bool left_btn_now_pressed = gpio_pin_get_dt(&left_btn) == 1;
 
 		if (btn_now_pressed && !btn_prev_pressed) {
 			recalibrate_reference_angle(imu);
 		}
+		if (right_btn_now_pressed && !right_btn_prev_pressed) {
+			current_ear = EAR_RIGHT;
+			ear_selected = true;
+			initialized = false;
+			last_time = k_uptime_get();
+			printk("Now measuring: RIGHT ear (reference roll mirrored)\n");
+		}
+		if (left_btn_now_pressed && !left_btn_prev_pressed) {
+			current_ear = EAR_LEFT;
+			ear_selected = true;
+			initialized = false;
+			last_time = k_uptime_get();
+			printk("Now measuring: LEFT ear (reference as calibrated)\n");
+		}
 		btn_prev_pressed = btn_now_pressed;
+		right_btn_prev_pressed = right_btn_now_pressed;
+		left_btn_prev_pressed = left_btn_now_pressed;
+
+		if (!ear_selected) {
+            // No sensor capture/comparison happens until an
+			// ear has been explicitly selected.
+
+			k_msleep(SAMPLE_PERIOD_MS);
+			continue;
+		}
 
 		struct sensor_value ax, ay, az, gx, gy, gz;
 
@@ -309,12 +350,21 @@ int main(void)
 				   (1.0 - FILTER_ALPHA) * accel_roll;
 		}
 
-		printk("pitch=%.2f roll=%.2f   (reference: pitch=%.2f roll=%.2f)\n",
-		       pitch_deg, roll_deg, reference_pitch, reference_roll);
+		// The right ear's correct angle is the left reference with
+		// roll mirrored (inverted). Pitch is assumed similar
+		// between ears only roll captures "which side" the
+		// canal leans toward.
+		double effective_reference_pitch = reference_pitch;
+		double effective_reference_roll =
+			(current_ear == EAR_RIGHT) ? -reference_roll : reference_roll;
+
+		printk("pitch=%.2f roll=%.2f   ear=%s   (reference: pitch=%.2f roll=%.2f)\n",
+		       pitch_deg, roll_deg,
+		       (current_ear == EAR_RIGHT) ? "RIGHT" : "LEFT",
+		       effective_reference_pitch, effective_reference_roll);
 
 		k_msleep(SAMPLE_PERIOD_MS);
 	}
 
 	return 0;
 }
- 
