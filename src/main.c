@@ -9,6 +9,12 @@
 #include <zephyr/fs/nvs.h>
 #include <zephyr/storage/flash_map.h>
 
+// Code Plan:
+// 1. Sensor Bias Calibration
+// 2. Clinician Calibration of Reference Angle
+// 3. Button 1 (DevKit) to trigger Clinician Calibration
+// 4. Button 2 and 3 to register left and right insertion angles
+// 5. Issue Warnings when angle passes threshold
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
@@ -34,6 +40,10 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 #define FILTER_ALPHA 0.98
 #define PI 3.14159265358979323846
+
+// Button node
+static const struct gpio_dt_spec calib_btn = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
+
 
 // Reference angle
 struct reference_angle {
@@ -127,12 +137,32 @@ static void reference_angle(const struct device *imu)
 
 		k_msleep(10);
 	}
-
 	reference_pitch = sum_pitch / captured;
 	reference_roll = sum_roll / captured;
 
 	printk("Reference angle captured: pitch=%.2f roll=%.2f\n",
 	       reference_pitch, reference_roll);
+}
+
+// Button 1 press captures and saves a new reference angle.
+static void recalibrate_reference_angle(const struct device *imu)
+{
+	printk("Button 1 pressed -- recalibrating reference angle.\n");
+	printk("Hold the device at the CORRECT insertion angle...\n");
+	k_msleep(2000);
+	reference_angle(imu);
+
+	struct reference_angle saved;
+
+	saved.pitch = reference_pitch;
+	saved.roll = reference_roll;
+	int rc = nvs_write(&nvs, REFERENCE_ANGLE_ID, &saved, sizeof(saved));
+
+	if (rc < 0) {
+		printk("Warning: failed to save reference angle: %d\n", rc);
+	} else {
+		printk("Reference angle saved.\n");
+	}
 }
 
 // Checks the notebook for a saved reference angle. If none is found, it prompts the user to hold the device at the correct angle and saves that as the reference.
@@ -199,6 +229,12 @@ int main(void)
 		return -ENODEV;
 	}
 
+	if (!gpio_is_ready_dt(&calib_btn)) {
+		printk("Calibration button not ready\n");
+		return -ENODEV;
+	}
+	gpio_pin_configure_dt(&calib_btn, GPIO_INPUT);
+
 	printk("MPU-6050 ready: %s\n", imu->name);
 	printk("Calibrating -- keep device still and flat...\n");
 	calibrate_imu(imu);
@@ -213,9 +249,19 @@ int main(void)
 	double pitch_deg = 0.0;
 	double roll_deg = 0.0;
 	bool initialized = false;
+	bool btn_prev_pressed = false;
 	int64_t last_time = k_uptime_get();
 
 	while (1) {
+		// Poll Button 1. Only react on release->pressed transition
+		// so holding it down doesn't retrigger repeatedly.
+		bool btn_now_pressed = gpio_pin_get_dt(&calib_btn) == 1;
+
+		if (btn_now_pressed && !btn_prev_pressed) {
+			recalibrate_reference_angle(imu);
+		}
+		btn_prev_pressed = btn_now_pressed;
+
 		struct sensor_value ax, ay, az, gx, gy, gz;
 
 		rc = sensor_sample_fetch(imu);
@@ -271,3 +317,4 @@ int main(void)
 
 	return 0;
 }
+ 
