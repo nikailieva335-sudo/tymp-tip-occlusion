@@ -19,7 +19,7 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 // NVS stores the reference angle calibrated by a clinician. Once the device is booted, the notebook is read and the
 // Accelerometer data is compared to the NVS data
 
-#define NVS_PARTITION storage_partition
+#define NVS_PARTITION nvs_storage
 #define NVS_PARTITION_DEVICE FIXED_PARTITION_DEVICE(NVS_PARTITION)
 #define NVS_PARTITION_OFFSET FIXED_PARTITION_OFFSET(NVS_PARTITION)
 #define REFERENCE_ANGLE_ID 1
@@ -30,6 +30,10 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 
 // Clinician calibration of "correct" angle
+// Gyro and Accelerometer filter's trust ratio
+
+#define FILTER_ALPHA 0.98
+#define PI 3.14159265358979323846
 
 // Reference angle
 struct reference_angle {
@@ -44,6 +48,7 @@ static double reference_pitch;
 static double reference_roll;
 
 // "Zero" the IMU by averaging a number of samples to determine the bias for each axis.
+
 static struct {
     double ax, ay, az;
     double gx, gy, gz;
@@ -53,7 +58,7 @@ static void calibrate_imu(const struct device *imu) {
     struct sensor_value ax, ay, az, gx, gy, gz;
     bias.ax = bias.ay = bias.az = 0;
     bias.gx = bias.gy = bias.gz = 0;
-
+// Loops 100 tmes.
     for (int i = 0; i < CALIBRATION_SAMPLES; i++) {
         int rc = sensor_sample_fetch(imu);
         if (rc != 0) {
@@ -80,6 +85,7 @@ static void calibrate_imu(const struct device *imu) {
     }
 
     // Average the biases
+
     bias.ax /= CALIBRATION_SAMPLES;
     bias.ay /= CALIBRATION_SAMPLES;
     bias.az = (bias.az / CALIBRATION_SAMPLES) - 9.80665; //subtract gravity from z axis
@@ -115,8 +121,8 @@ static void reference_angle(const struct device *imu)
 		double ay_v = (ay.val1 + ay.val2 / 1e6) - bias.ay;
 		double az_v = (az.val1 + az.val2 / 1e6) - bias.az;
 
-		sum_pitch += atan2(-ax_v, sqrt(ay_v * ay_v + az_v * az_v)) * 180.0 / M_PI;
-		sum_roll += atan2(ay_v, az_v) * 180.0 / M_PI;
+		sum_pitch += atan2(-ax_v, sqrt(ay_v * ay_v + az_v * az_v)) * 180.0 / PI;
+		sum_roll += atan2(ay_v, az_v) * 180.0 / PI;
 		captured++;
 
 		k_msleep(10);
@@ -129,54 +135,7 @@ static void reference_angle(const struct device *imu)
 	       reference_pitch, reference_roll);
 }
 
-
-int main(void)
-{
-	const struct device *imu = DEVICE_DT_GET(IMU_NODE);
-
-	if (!device_is_ready(imu)) {
-		printk("MPU-6050 not ready -- check wiring, overlay, and prj.conf\n");
-		return -ENODEV;
-	}
-
-	printk("MPU-6050 ready: %s\n", imu->name);
-
-	while (1) {
-		struct sensor_value ax, ay, az, gx, gy, gz;
-
-		int rc = sensor_sample_fetch(imu);
-
-		if (rc != 0) {
-			printk("sensor_sample_fetch failed: %d\n", rc);
-			k_msleep(500);
-			continue;
-		}
-
-		sensor_channel_get(imu, SENSOR_CHAN_ACCEL_X, &ax);
-		sensor_channel_get(imu, SENSOR_CHAN_ACCEL_Y, &ay);
-		sensor_channel_get(imu, SENSOR_CHAN_ACCEL_Z, &az);
-		sensor_channel_get(imu, SENSOR_CHAN_GYRO_X, &gx);
-		sensor_channel_get(imu, SENSOR_CHAN_GYRO_Y, &gy);
-		sensor_channel_get(imu, SENSOR_CHAN_GYRO_Z, &gz);
-
-        double ax_v = (ax.val1 + ax.val2 / 1e6) - bias.ax;
-		double ay_v = (ay.val1 + ay.val2 / 1e6) - bias.ay;
-		double az_v = (az.val1 + az.val2 / 1e6) - bias.az;
-		double gx_v = (gx.val1 + gx.val2 / 1e6) - bias.gx;
-		double gy_v = (gy.val1 + gy.val2 / 1e6) - bias.gy;
-		double gz_v = (gz.val1 + gz.val2 / 1e6) - bias.gz;
-
-		printk("accel (m/s^2): x=%.6f y=%.6f z=%.6f   "
-		       "gyro (rad/s): x=%.6f y=%.6f z=%.6f\n",
-		       ax_v, ay_v, az_v, gx_v, gy_v, gz_v);
-		k_msleep(500);
-	}
-    	reference_pitch = sum_pitch / captured;
-	reference_roll = sum_roll / captured;
-
-	printk("Reference angle captured: pitch=%.2f roll=%.2f\n",
-	       reference_pitch, reference_roll);
-}
+// Checks the notebook for a saved reference angle. If none is found, it prompts the user to hold the device at the correct angle and saves that as the reference.
 static int setup_reference_angle(const struct device *imu)
 {
 	nvs.flash_device = NVS_PARTITION_DEVICE;
@@ -202,8 +161,7 @@ static int setup_reference_angle(const struct device *imu)
 		printk("NVS mount failed: %d\n", rc);
 		return rc;
 	}
-
-	struct reference_angle saved;
+    struct reference_angle saved;
 
 	rc = nvs_read(&nvs, REFERENCE_ANGLE_ID, &saved, sizeof(saved));
 	if (rc == sizeof(saved)) {
@@ -217,7 +175,7 @@ static int setup_reference_angle(const struct device *imu)
 	printk("No saved reference angle found -- running first-time setup.\n");
 	printk("Now hold the device at the CORRECT insertion angle...\n");
 	k_msleep(2000); /* give the operator a moment to get into position */
-	capture_reference_angle(imu);
+	reference_angle(imu);
 
 	saved.pitch = reference_pitch;
 	saved.roll = reference_roll;
@@ -231,12 +189,13 @@ static int setup_reference_angle(const struct device *imu)
 	return 0;
 }
 
+//
 int main(void)
 {
 	const struct device *imu = DEVICE_DT_GET(IMU_NODE);
 
 	if (!device_is_ready(imu)) {
-		printk("MPU-6050 not ready -- check wiring, overlay, and prj.conf\n");
+		printk("MPU-6050 not ready\n");
 		return -ENODEV;
 	}
 
@@ -280,26 +239,28 @@ int main(void)
 		double gx_v = (gx.val1 + gx.val2 / 1e6) - bias.gx;
 		double gy_v = (gy.val1 + gy.val2 / 1e6) - bias.gy;
 
-		double accel_pitch = atan2(-ax_v, sqrt(ay_v * ay_v + az_v * az_v)) * 180.0 / M_PI;
-		double accel_roll = atan2(ay_v, az_v) * 180.0 / M_PI;
+		double accel_pitch = atan2(-ax_v, sqrt(ay_v * ay_v + az_v * az_v)) * 180.0 / PI;
+		double accel_roll = atan2(ay_v, az_v) * 180.0 / PI;
 
-		double gyro_pitch_rate = gy_v * 180.0 / M_PI;
-		double gyro_roll_rate = gx_v * 180.0 / M_PI;
+        // Gyro rates, converted rad/s -> deg/s
+		double gyro_pitch_rate = gy_v * 180.0 / PI;
+		double gyro_roll_rate = gx_v * 180.0 / PI;
 
 		int64_t now = k_uptime_get();
-		double dt = (now - last_time) / 1000.0;
+		double dt = (now - last_time) / 1000.0; // seconds
 
 		last_time = now;
 
 		if (!initialized) {
+			// Initialize the filter with the accelerometer angles on the first iteration
 			pitch_deg = accel_pitch;
 			roll_deg = accel_roll;
 			initialized = true;
 		} else {
-			pitch_deg = COMP_FILTER_ALPHA * (pitch_deg + gyro_pitch_rate * dt) +
-				    (1.0 - COMP_FILTER_ALPHA) * accel_pitch;
-			roll_deg = COMP_FILTER_ALPHA * (roll_deg + gyro_roll_rate * dt) +
-				   (1.0 - COMP_FILTER_ALPHA) * accel_roll;
+			pitch_deg = FILTER_ALPHA * (pitch_deg + gyro_pitch_rate * dt) +
+				    (1.0 - FILTER_ALPHA) * accel_pitch;
+			roll_deg = FILTER_ALPHA * (roll_deg + gyro_roll_rate * dt) +
+				   (1.0 - FILTER_ALPHA) * accel_roll;
 		}
 
 		printk("pitch=%.2f roll=%.2f   (reference: pitch=%.2f roll=%.2f)\n",
