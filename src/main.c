@@ -33,7 +33,7 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 // The tolerance of the angle
 #define ANGLE_THRESHOLD_DEG 45.0
 #define REFERENCE_SAMPLES 100
-
+#define WARNING_SAMPLES 10
 
 // Clinician calibration of "correct" angle
 // Gyro and Accelerometer filter's trust ratio
@@ -266,6 +266,9 @@ int main(void)
 	bool left_btn_prev_pressed = false;
 	bool ear_selected = false;
 	int64_t last_time = k_uptime_get();
+    int bad_count = 0;
+	int good_count = 0;
+    bool warning_active = false;
 
 	while (1) {
 		// Poll all three buttons. Only react on release->pressed
@@ -358,10 +361,34 @@ int main(void)
 		double effective_reference_roll =
 			(current_ear == EAR_RIGHT) ? -reference_roll : reference_roll;
 
-		printk("pitch=%.2f roll=%.2f   ear=%s   (reference: pitch=%.2f roll=%.2f)\n",
+      double pitch_deviation = fabs(pitch_deg - effective_reference_pitch);
+		double roll_deviation = fabs(roll_deg - effective_reference_roll);
+		bool out_of_range = (pitch_deviation > ANGLE_THRESHOLD_DEG) ||
+				     (roll_deviation > ANGLE_THRESHOLD_DEG);
+
+		if (out_of_range) {
+			bad_count++;
+			good_count = 0;
+		} else {
+			good_count++;
+			bad_count = 0;
+		}
+        	if (!warning_active && bad_count >= WARNING_SAMPLES) {
+			warning_active = true;
+			printk("WARNING: insertion angle out of range (pitch=%.2f roll=%.2f)\n",
+			       pitch_deg, roll_deg);
+		} else if (warning_active && good_count >= WARNING_SAMPLES) {
+			warning_active = false;
+			printk("Angle back in range (pitch=%.2f roll=%.2f)\n",
+			       pitch_deg, roll_deg);
+		}
+
+		printk("pitch=%.2f roll=%.2f   ear=%s   (reference: pitch=%.2f roll=%.2f)%s\n",
 		       pitch_deg, roll_deg,
 		       (current_ear == EAR_RIGHT) ? "RIGHT" : "LEFT",
-		       effective_reference_pitch, effective_reference_roll);
+		       effective_reference_pitch, effective_reference_roll,
+		       warning_active ? "  [WARNING: OUT OF RANGE]" : "");
+
 
 		k_msleep(SAMPLE_PERIOD_MS);
 	}
